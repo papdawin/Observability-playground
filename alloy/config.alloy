@@ -1,0 +1,41 @@
+// --- Discover Docker containers via the socket ---
+discovery.docker "local" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+// --- Read logs from discovered containers ---
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.local.targets
+  forward_to = [loki.process.add_job.receiver]
+}
+
+// --- Add a stable label so you can query in Grafana: {job="docker"} ---
+loki.process "add_job" {
+  stage.static_labels { values = { job = "docker" } }
+  forward_to = [loki.write.default.receiver]
+}
+
+// --- Push logs to Loki ---
+loki.write "default" {
+  endpoint { url = "http://loki:3100/loki/api/v1/push" }
+}
+
+// --- OTLP traces -> Tempo (no pipeline component) ---
+otelcol.receiver.otlp "default" {
+  grpc { endpoint = "0.0.0.0:4317" }
+  http { endpoint = "0.0.0.0:4318" }
+  output { traces = [otelcol.processor.batch.default.input] }
+}
+
+otelcol.processor.batch "default" {
+  output { traces = [otelcol.exporter.otlp.to_tempo.input] }
+}
+
+otelcol.exporter.otlp "to_tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls { insecure = true }
+  }
+}
